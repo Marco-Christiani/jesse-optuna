@@ -13,34 +13,43 @@ mutation_prob: 0.0333
 crossover_prob: 0.6
 swapping_prob: 0.05
 
-strategy_name: 'Test'
+strategy_name: Test
 
-starting_balance: 5000
-fee: 0.001
+starting_balance: 100000
+fee: 0.0004
 futures_leverage: 1
 futures_leverage_mode: cross
 settlement_currency: USDT
-warm_up_candles: 240
-exchange: Binance
-symbol: 'BTC-USDT'
-timeframe: '1h'
+warm_up_candles: 3000
+exchange: Binance Perpeutual Futures
+# symbol: 'BTC-USDT'
+# timeframe: '1h'
+routes:
+  route1:
+    exchange: Binance Perpeutual Futures
+    symbol: BTC-USDT
+    timeframe: 1h
+  route2:
+    exchange: Binance Perpeutual Futures
+    symbol: ETH-USDT
+    timeframe: 1h
 
 timespan-train:
-  start_date: '2020-01-01'
-  finish_date: '2021-01-01'
+  start_date: '2021-01-02'
+  finish_date: '2021-03-01'
 timespan-testing:
-  start_date: '2021-01-01'
-  finish_date: '2021-11-01'
+  start_date: '2021-03-01'
+  finish_date: '2021-12-01'
 
-extra_routes:
-  0:
-    exchange: 'Binance'
-    symbol: 'BTC-USDT'
-    timeframe: '1D'
-  1:
-    exchange: 'Binance'
-    symbol: 'BNB-USDT'
-    timeframe: '1D'
+# extra_routes:
+#   0:
+#     exchange: 'Binance'
+#     symbol: 'BTC-USDT'
+#     timeframe: '1D'
+#   1:
+#     exchange: 'Binance'
+#     symbol: 'BNB-USDT'
+#     timeframe: '1D'
 
 postgres_host: 'postgres'
 postgres_db_name: 'optuna_db'

@@ -4,6 +4,7 @@ import pathlib
 import pickle
 import shutil
 import traceback
+from datetime import datetime
 
 import click
 import jesse.helpers as jh
@@ -11,7 +12,9 @@ import numpy as np
 import optuna
 import pkg_resources
 import yaml
-from jesse.research import backtest, get_candles
+from jesse.research import backtest
+from jesse.research import get_candles
+
 from .JoblilbStudy import JoblibStudy
 
 
@@ -20,7 +23,7 @@ logger.addHandler(logging.FileHandler("jesse-optuna.log", mode="w"))
 
 optuna.logging.enable_propagation()
 
-# create a Click group
+
 @click.group()
 @click.version_option(pkg_resources.get_distribution("jesse-optuna").version)
 def cli() -> None:
@@ -32,7 +35,9 @@ def create_config() -> None:
     validate_cwd()
     target_dirname = pathlib.Path().resolve()
     package_dir = pathlib.Path(__file__).resolve().parent
-    shutil.copy2(f'{package_dir}/optuna_config.yml', f'{target_dirname}/optuna_config.yml')
+    shutil.copy2(f'{package_dir}/optuna_config.yml',
+                 f'{target_dirname}/optuna_config.yml')
+
 
 @cli.command()
 @click.argument('db_name', required=True, type=str)
@@ -43,7 +48,11 @@ def create_db(db_name: str) -> None:
 
     # establishing the connection
     conn = psycopg2.connect(
-        database="postgres", user=cfg['postgres_username'], password=cfg['postgres_password'], host=cfg['postgres_host'], port=cfg['postgres_port']
+        database="postgres",
+        user=cfg['postgres_username'],
+        password=cfg['postgres_password'],
+        host=cfg['postgres_host'],
+        port=cfg['postgres_port']
     )
     conn.autocommit = True
 
@@ -51,7 +60,7 @@ def create_db(db_name: str) -> None:
     cursor = conn.cursor()
 
     # Creating a database
-    cursor.execute('CREATE DATABASE ' + str(db_name))
+    cursor.execute(f'CREATE DATABASE {db_name}')
     print(f"Database {db_name} created successfully........")
 
     # Closing the connection
@@ -63,8 +72,10 @@ def run() -> None:
     validate_cwd()
 
     cfg = get_config()
-    study_name = f"{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
-    storage = f"postgresql://{cfg['postgres_username']}:{cfg['postgres_password']}@{cfg['postgres_host']}:{cfg['postgres_port']}/{cfg['postgres_db_name']}"
+    # study_name = f"{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
+    study_name = f'{cfg["study_name"]}-{cfg["exchange"]}-{cfg["timeframe"]}-{datetime.now()}'
+    storage = f"postgresql://{cfg['postgres_username']}:{cfg['postgres_password']}@{cfg['postgres_host']}"\
+        f":{cfg['postgres_port']}/{cfg['postgres_db_name']}"
 
     sampler = optuna.samplers.NSGAIISampler(population_size=cfg['population_size'], mutation_prob=cfg['mutation_prob'],
                                             crossover_prob=cfg['crossover_prob'], swapping_prob=cfg['swapping_prob'])
@@ -74,25 +85,26 @@ def run() -> None:
 
     try:
         study = JoblibStudy(study_name=study_name, direction="maximize", sampler=sampler,
-                                    storage=storage, load_if_exists=False)
+                            storage=storage, load_if_exists=False)
     except optuna.exceptions.DuplicatedStudyError:
         if click.confirm('Previous study detected. Do you want to resume?', default=True):
             study = JoblibStudy(study_name=study_name, direction="maximize", sampler=sampler,
-                                        storage=storage, load_if_exists=True)
+                                storage=storage, load_if_exists=True)
         elif click.confirm('Delete previous study and start new?', default=False):
             optuna.delete_study(study_name=study_name, storage=storage)
             study = JoblibStudy(study_name=study_name, direction="maximize", sampler=sampler,
-                                        storage=storage, load_if_exists=False)
+                                storage=storage, load_if_exists=False)
         else:
             print("Exiting.")
             exit(1)
 
+    symbols = [x['symbol'] for x in cfg['routes'].values()]
     study.set_user_attr("strategy_name", cfg['strategy_name'])
     study.set_user_attr("exchange", cfg['exchange'])
-    study.set_user_attr("symbol", cfg['symbol'])
+    study.set_user_attr("symbols", ','.join(symbols))
     study.set_user_attr("timeframe", cfg['timeframe'])
-
-
+    # import joblib
+    # with joblib.parallel_backend('multiprocessing'):
     study.optimize(objective, n_jobs=cfg['n_jobs'], n_trials=cfg['n_trials'])
 
 
@@ -119,33 +131,36 @@ def objective(trial):
         if st_hp['type'] is int:
             if 'step' not in st_hp:
                 st_hp['step'] = 1
-            trial.suggest_int(st_hp['name'], st_hp['min'], st_hp['max'], step=st_hp['step'])
+            trial.suggest_int(st_hp['name'], st_hp['min'],
+                              st_hp['max'], step=st_hp['step'])
         elif st_hp['type'] is float:
             if 'step' not in st_hp:
                 st_hp['step'] = 0.1
-            trial.suggest_float(st_hp['name'], st_hp['min'], st_hp['max'], step=st_hp['step'])
+            trial.suggest_float(
+                st_hp['name'], st_hp['min'], st_hp['max'], step=st_hp['step'])
         elif st_hp['type'] is bool:
             trial.suggest_categorical(st_hp['name'], [True, False])
         else:
-            raise TypeError('Only int, bool and float types are implemented for strategy parameters.')
+            raise TypeError(
+                'Only int, bool and float types are implemented for strategy parameters.')
 
     try:
         training_data_metrics = backtest_function(cfg['timespan-train']['start_date'],
                                                   cfg['timespan-train']['finish_date'],
                                                   trial.params, cfg)
     except Exception as err:
-        logger.error("".join(traceback.TracebackException.from_exception(err).format()))
+        logger.error(
+            "".join(traceback.TracebackException.from_exception(err).format()))
         raise err
-
 
     if training_data_metrics is None:
         return np.nan
 
-
     if training_data_metrics['total'] <= 5:
         return np.nan
 
-    total_effect_rate = np.log10(training_data_metrics['total']) / np.log10(cfg['optimal-total'])
+    total_effect_rate = np.log10(
+        training_data_metrics['total']) / np.log10(cfg['optimal-total'])
     total_effect_rate = min(total_effect_rate, 1)
     ratio_config = cfg['fitness-ratio']
     if ratio_config == 'sharpe':
@@ -178,9 +193,11 @@ def objective(trial):
     score = total_effect_rate * ratio_normalized
 
     try:
-        testing_data_metrics = backtest_function(cfg['timespan-testing']['start_date'], cfg['timespan-testing']['finish_date'], trial.params, cfg)
+        testing_data_metrics = backtest_function(
+            cfg['timespan-testing']['start_date'], cfg['timespan-testing']['finish_date'], trial.params, cfg)
     except Exception as err:
-        logger.error("".join(traceback.TracebackException.from_exception(err).format()))
+        logger.error(
+            "".join(traceback.TracebackException.from_exception(err).format()))
         raise err
 
     if testing_data_metrics is None:
@@ -205,6 +222,7 @@ def objective(trial):
         trial.set_user_attr(f"training-{key}", value)
     return score
 
+
 def validate_cwd() -> None:
     """
     make sure we're in a Jesse project
@@ -217,7 +235,10 @@ def validate_cwd() -> None:
         exit()
 
 
-def get_candles_with_cache(exchange: str, symbol: str, start_date: str, finish_date: str) -> np.ndarray:
+def get_candles_with_cache(exchange: str,
+                           symbol: str,
+                           start_date: str,
+                           finish_date: str) -> np.ndarray:
     path = pathlib.Path('storage/jesse-optuna')
     path.mkdir(parents=True, exist_ok=True)
 
@@ -236,10 +257,10 @@ def get_candles_with_cache(exchange: str, symbol: str, start_date: str, finish_d
 
 
 def backtest_function(start_date, finish_date, hp, cfg):
-
     candles = {}
     extra_routes = []
-    if len(cfg['extra_routes']) != 0:
+    # if len(cfg['extra_routes']) != 0:
+    if 'extra_routes' in cfg:
         for extra_route in cfg['extra_routes'].items():
             extra_route = extra_route[1]
             candles[jh.key(extra_route['exchange'], extra_route['symbol'])] = {
@@ -254,23 +275,29 @@ def backtest_function(start_date, finish_date, hp, cfg):
             }
             extra_routes.append({'exchange': extra_route['exchange'], 'symbol': extra_route['symbol'],
                                  'timeframe': extra_route['timeframe']})
-    candles[jh.key(cfg['exchange'], cfg['symbol'])] = {
-        'exchange': cfg['exchange'],
-        'symbol': cfg['symbol'],
-        'candles': get_candles_with_cache(
-            cfg['exchange'],
-            cfg['symbol'],
-            start_date,
-            finish_date,
-        ),
-    }
-
-    route = [{'exchange': cfg['exchange'], 'strategy': cfg['strategy_name'], 'symbol': cfg['symbol'],
-              'timeframe': cfg['timeframe']}]
+    routes = []
+    for route in cfg['routes'].values():
+        candles[jh.key(route['exchange'], route['symbol'])] = {
+            'exchange': route['exchange'],
+            'symbol': route['symbol'],
+            'timeframe': route['timeframe'],
+            'candles': get_candles_with_cache(
+                route['exchange'],
+                route['symbol'],
+                # route['timeframe'],
+                start_date,
+                finish_date,
+            ),
+        }
+        routes.append({'exchange': route['exchange'],
+                       'strategy': cfg['strategy_name'],
+                       'symbol': route['symbol'],
+                       'timeframe': route['timeframe']})
 
     config = {
         'starting_balance': cfg['starting_balance'],
         'fee': cfg['fee'],
+        'type': cfg['type'],
         'futures_leverage': cfg['futures_leverage'],
         'futures_leverage_mode': cfg['futures_leverage_mode'],
         'exchange': cfg['exchange'],
@@ -278,8 +305,11 @@ def backtest_function(start_date, finish_date, hp, cfg):
         'warm_up_candles': cfg['warm_up_candles']
     }
 
-
-    backtest_data = backtest(config, route, extra_routes, candles, hyperparameters = hp)['metrics']
+    backtest_result = backtest(config, routes, extra_routes,
+                               candles, hyperparameters=hp)
+    print('backtest done')
+    print(backtest_result)
+    backtest_data = backtest_result['metrics']
 
     if backtest_data['total'] == 0:
         backtest_data = {'total': 0, 'total_winning_trades': None, 'total_losing_trades': None,
